@@ -15,6 +15,11 @@ from loguru import logger
 from app.config import config
 from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
+from app.models.storyboard import (
+    parse_storyboard_text,
+    storyboard_narration,
+    storyboard_visual_terms,
+)
 from app.services import bgm as bgm_service
 from app.services import (
     elevenlabs_music,
@@ -101,6 +106,18 @@ def _get_video_music_prompt(params: VideoParams) -> str:
     if params.bgm_type == "sonilo" and not prompt:
         prompt = str(params.sonilo_bgm_prompt or "").strip()
     return prompt
+
+
+def apply_storyboard(params: VideoParams):
+    """Make storyboard text the canonical input for every downstream stage."""
+    if not params.storyboard_enabled:
+        return []
+    scenes = parse_storyboard_text(params.storyboard_text)
+    params.video_script = storyboard_narration(scenes)
+    params.video_terms = storyboard_visual_terms(scenes)
+    params.match_materials_to_script = True
+    params.video_concat_mode = VideoConcatMode.sequential
+    return scenes
 
 
 def is_task_busy(task: dict | None) -> bool:
@@ -1387,6 +1404,13 @@ def _run_pipeline(
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
 
+    try:
+        storyboard_scenes = apply_storyboard(params)
+    except ValueError as exc:
+        return _mark_task_failed(task_id, "storyboard", str(exc))
+    if storyboard_scenes:
+        logger.info(f"using storyboard with {len(storyboard_scenes)} scenes")
+
     if (
         stop_at in {"materials", "video"}
         and params.video_source == "volcengine_seedance"
@@ -1636,6 +1660,29 @@ def _run_pipeline(
             "failed to generate final video",
         )
 
+    cover_paths = []
+    if params.cover_enabled:
+        cover_title = str(params.video_subject or video_script or "").strip().splitlines()[0]
+        for index, final_video_path in enumerate(final_video_paths, start=1):
+            cover_path = path.join(utils.task_dir(task_id), f"cover-{index}.jpg")
+            try:
+                video.generate_cover_image(
+                    video_path=final_video_path,
+                    output_path=cover_path,
+                    title=cover_title,
+                    font_name=params.font_name or "STHeitiMedium.ttc",
+                )
+            except Exception as exc:
+                logger.exception(
+                    f"failed to generate cover: task_id={task_id}, "
+                    f"video_index={index}, error={exc}"
+                )
+                generation_warnings.append(
+                    {"code": "cover_generation_failed", "video_index": index}
+                )
+            else:
+                cover_paths.append(cover_path)
+
     logger.success(
         f"task {task_id} finished, generated {len(final_video_paths)} videos."
     )
@@ -1658,6 +1705,7 @@ def _run_pipeline(
 
     kwargs = {
         "videos": final_video_paths,
+        "covers": cover_paths,
         "combined_videos": combined_video_paths,
         "script": video_script,
         "terms": video_terms,

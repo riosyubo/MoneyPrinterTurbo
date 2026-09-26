@@ -43,6 +43,11 @@ from app.models.schema import (
     VideoParams,
     VideoTransitionMode,
 )
+from app.models.storyboard import (
+    parse_storyboard_text,
+    storyboard_narration,
+    storyboard_visual_terms,
+)
 from app.services import bgm as bgm_service
 from app.services import (
     cache_manager,
@@ -632,6 +637,9 @@ def _initialize_session_state():
 
     defaults = {
         "video_subject": "",
+        "storyboard_enabled": False,
+        "storyboard_text": "",
+        "storyboard_mode_active": False,
         "video_script": "",
         "video_terms": "",
         "paragraph_number_input": _saved_ui_number(
@@ -653,6 +661,7 @@ def _initialize_session_state():
         "match_materials_to_script": bool(
             config.app.get("match_materials_to_script", False)
         ),
+        "cover_enabled": _saved_ui_bool("cover_enabled", True),
         "custom_bgm_file_input": _saved_ui_text("custom_bgm_file"),
         "sonilo_bgm_prompt_input": _saved_ui_text(
             "sonilo_bgm_prompt",
@@ -1459,6 +1468,11 @@ def _apply_restored_params(params):
 
     # 文案与高级脚本设置。
     st.session_state["video_subject"] = params.get("video_subject") or ""
+    st.session_state["storyboard_enabled"] = bool(
+        params.get("storyboard_enabled", False)
+    )
+    st.session_state["storyboard_text"] = params.get("storyboard_text") or ""
+    st.session_state["storyboard_mode_active"] = False
     st.session_state["video_script"] = params.get("video_script") or ""
     st.session_state["video_terms"] = str(video_terms)
     _set_stable_widget_value(
@@ -1502,6 +1516,7 @@ def _apply_restored_params(params):
     st.session_state["match_materials_to_script"] = bool(
         params.get("match_materials_to_script", False)
     )
+    st.session_state["cover_enabled"] = bool(params.get("cover_enabled", True))
 
     # 音频设置。TTS server 未写入旧任务，根据历史 voice_name 推断。
     voice_name = params.get("voice_name") or voice.NO_VOICE_NAME
@@ -1962,6 +1977,7 @@ def _render_generation_task_snapshot(task_id, task):
         return
 
     video_files = task.get("videos") or []
+    cover_files = task.get("covers") or []
     if state != const.TASK_STATE_COMPLETE or not video_files:
         st.error(tr("Video Generation Failed"))
         _render_generation_logs(task_id)
@@ -1990,6 +2006,15 @@ def _render_generation_task_snapshot(task_id, task):
                     index=warning.get("video_index", "")
                 )
             )
+        elif (
+            isinstance(warning, Mapping)
+            and warning.get("code") == "cover_generation_failed"
+        ):
+            st.warning(
+                tr("Cover Generation Failed").format(
+                    index=warning.get("video_index", "")
+                )
+            )
         else:
             st.warning(str(warning))
 
@@ -1997,6 +2022,20 @@ def _render_generation_task_snapshot(task_id, task):
         player_cols = st.columns(len(video_files) * 2 + 1)
         for i, url in enumerate(video_files):
             with player_cols[i * 2 + 1]:
+                if i < len(cover_files) and os.path.isfile(cover_files[i]):
+                    cover_file_path = cover_files[i]
+                    st.image(cover_file_path, caption=tr("Video Cover"))
+                    with open(cover_file_path, "rb") as cover_file:
+                        st.download_button(
+                            tr("Download Cover"),
+                            data=cover_file,
+                            file_name=f"cover-{i + 1}.jpg",
+                            mime="image/jpeg",
+                            key=f"download_generated_cover_{task_id}_{i}",
+                            icon=":material/image:",
+                            on_click="ignore",
+                            use_container_width=True,
+                        )
                 st.video(url)
                 if not os.path.isfile(url):
                     logger.warning(
@@ -4938,6 +4977,60 @@ def _render_script_settings(panel, params):
             params.video_language = selected_language_code
             _set_runtime_config("ui", "video_language", params.video_language)
 
+            params.storyboard_enabled = st.checkbox(
+                tr("Storyboard Mode"),
+                help=tr("Storyboard Mode Help"),
+                key="storyboard_enabled",
+            )
+            storyboard_mode_was_active = bool(
+                st.session_state.get("storyboard_mode_active", False)
+            )
+            if params.storyboard_enabled:
+                if not storyboard_mode_was_active:
+                    st.session_state["storyboard_previous_match_mode"] = bool(
+                        st.session_state.get("match_materials_to_script", False)
+                    )
+                st.session_state["storyboard_mode_active"] = True
+                st.session_state["match_materials_to_script"] = True
+                params.match_materials_to_script = True
+                params.video_concat_mode = VideoConcatMode.sequential
+                params.storyboard_text = st.text_area(
+                    tr("Storyboard Text"),
+                    help=tr("Storyboard Text Help"),
+                    placeholder=tr("Storyboard Text Placeholder"),
+                    height=320,
+                    max_chars=30000,
+                    key="storyboard_text",
+                )
+                try:
+                    scenes = parse_storyboard_text(params.storyboard_text)
+                except ValueError as exc:
+                    params.video_script = ""
+                    params.video_terms = []
+                    if params.storyboard_text.strip():
+                        st.error(tr("Invalid Storyboard").format(error=exc))
+                else:
+                    params.video_script = storyboard_narration(scenes)
+                    params.video_terms = storyboard_visual_terms(scenes)
+                    st.success(
+                        tr("Storyboard Scene Count").format(count=len(scenes))
+                    )
+                    with st.expander(tr("Storyboard Derived Content")):
+                        st.markdown(f"**{tr('Video Script')}**")
+                        st.code(params.video_script, language=None, wrap_lines=True)
+                        st.markdown(f"**{tr('Video Keywords')}**")
+                        for scene in scenes:
+                            st.markdown(f"{scene.index}. {scene.visual}")
+                return
+            if storyboard_mode_was_active:
+                st.session_state["match_materials_to_script"] = bool(
+                    st.session_state.pop("storyboard_previous_match_mode", False)
+                )
+                st.session_state["storyboard_mode_active"] = False
+                params.match_materials_to_script = bool(
+                    st.session_state["match_materials_to_script"]
+                )
+
             # 使用带 key 的局部容器限定折叠入口样式，保持 expander 的原生交互，
             # 同时避免样式误伤页面顶部的“基础设置”等其他折叠区域。
             with st.container(key="advanced_settings_script"):
@@ -5175,6 +5268,7 @@ def _render_video_settings(panel, params):
                 help=tr("Match Materials to Script Order Help"),
                 key="match_materials_to_script",
                 on_change=sync_script_order_concat_mode,
+                disabled=params.storyboard_enabled,
             )
             _set_runtime_config(
                 "app",
@@ -5187,6 +5281,13 @@ def _render_video_settings(panel, params):
                 _set_runtime_config(
                     "ui", "video_concat_mode", params.video_concat_mode.value
                 )
+
+            params.cover_enabled = st.checkbox(
+                tr("Generate Cover"),
+                help=tr("Generate Cover Help"),
+                key="cover_enabled",
+            )
+            _set_runtime_config("ui", "cover_enabled", params.cover_enabled)
 
             # 视频转场模式
             video_transition_modes = [
@@ -7834,6 +7935,12 @@ def _render_generation_controls(
     if start_button:
         _save_runtime_config()
         task_id = st.session_state.get("pending_generation_task_id") or str(uuid4())
+        if params.storyboard_enabled:
+            try:
+                tm.apply_storyboard(params)
+            except ValueError as exc:
+                st.error(tr("Invalid Storyboard").format(error=exc))
+                st.stop()
         _add_active_generation_task(
             task_id,
             subject=params.video_subject or params.video_script or task_id,

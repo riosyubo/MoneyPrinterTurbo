@@ -18,6 +18,148 @@
 
 </div>
 
+> [!IMPORTANT]
+> 本仓库是基于 [harry0703/MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) 的个人增强版，
+> 不是原项目的官方发行版。原项目及既有代码的版权归原作者和原贡献者所有；本仓库新增与修改的代码版权归本仓库维护者和相关贡献者所有。
+> 全部代码继续依照 [MIT License](LICENSE) 发布，详细关系见 [NOTICE.md](NOTICE.md)。
+
+## 本增强版新增内容
+
+这个版本面向中文短视频的本地生产流程，在保留上游全部功能的基础上增加了以下能力：
+
+- **结构化分镜**：可按“镜头 N / 屏幕大字 / 画面”格式编辑分镜，脚本、素材检索词和成片画面围绕分镜内容生成。
+- **视频封面**：自动截取每条成片的开头画面，以视频主题生成醒目的中文封面，并提供独立 JPG 预览和下载。
+- **本地完整部署**：提供 [docker-compose.local.yml](docker-compose.local.yml)，一次启动 WebUI、API 和 Redis，任务状态与素材目录持久保存。
+- **Windows 一键启动**：提供 [Start-MoneyPrinterTurbo.ps1](scripts/Start-MoneyPrinterTurbo.ps1)，可配合桌面或任务栏快捷方式启动服务并打开页面。
+- **中文界面完善**：分镜、封面、任务恢复和错误提示均提供中文界面文案。
+
+## 本地快速部署
+
+### 环境要求
+
+- Windows 10/11、macOS 或 Linux
+- Docker Desktop 或 Docker Engine，支持 `docker compose`
+- Git（用于克隆和后续更新）
+- 至少 4 GB 可用内存；处理高清视频时建议预留更多内存和磁盘空间
+
+### 1. 获取代码
+
+```bash
+git clone https://github.com/riosyubo/MoneyPrinterTurbo.git
+cd MoneyPrinterTurbo
+```
+
+### 2. 创建本地配置
+
+Windows PowerShell：
+
+```powershell
+Copy-Item config.example.toml config.toml
+```
+
+macOS / Linux：
+
+```bash
+cp config.example.toml config.toml
+```
+
+编辑 `config.toml`，至少配置一个用于生成文案的模型服务。素材、语音、音乐和视频生成服务可按实际需要配置。`config.toml` 已被 Git 忽略，不会随正常提交上传。
+
+### 3. 启动完整服务
+
+```bash
+docker compose -f docker-compose.local.yml up -d
+```
+
+启动完成后访问：
+
+| 服务 | 地址 | 用途 |
+| --- | --- | --- |
+| WebUI | <http://127.0.0.1:8501/> | 浏览器创作界面 |
+| API 文档 | <http://127.0.0.1:8080/docs> | FastAPI 接口与在线调试 |
+
+查看运行状态和日志：
+
+```bash
+docker compose -f docker-compose.local.yml ps
+docker compose -f docker-compose.local.yml logs -f webui api
+```
+
+停止服务：
+
+```bash
+docker compose -f docker-compose.local.yml down
+```
+
+### 4. Windows 一键启动
+
+在 PowerShell 中运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Start-MoneyPrinterTurbo.ps1
+```
+
+脚本会启动 Docker 服务、等待 WebUI 健康检查通过并自动打开浏览器。使用 `-NoOpen` 参数可以只启动服务。
+
+## 分镜工作流
+
+在 WebUI 中开启分镜后，使用如下格式：
+
+```text
+镜头1
+屏幕大字：每天吃五六种药，怎样整理才不容易吃错？
+画面：老人坐在餐桌前，将药盒、处方和用药清单整齐摆放。
+
+镜头2
+屏幕大字：第一步：做一张完整用药清单
+画面：近景展示药名、剂量、服用时间和开药医院四列清单。
+```
+
+每个镜头必须有编号、屏幕大字和画面描述。系统会校验格式，并让脚本、检索词和素材匹配围绕各镜头展开。
+
+## 封面生成
+
+“视频设置”中的“生成视频封面”默认开启。任务完成后，系统将：
+
+1. 从每条最终视频提取稳定的开头画面；
+2. 将视频主题自动换行并叠加为白色大字；
+3. 添加半透明深色底板以提高可读性；
+4. 输出 `cover-1.jpg`、`cover-2.jpg` 等文件；
+5. 在结果区域显示预览与“下载封面”按钮。
+
+封面生成失败不会使已经生成的视频失败，页面会单独显示警告。
+
+## 数据与密钥安全
+
+- `config.toml`：保存本机 API 配置，已加入 `.gitignore`。
+- `.env`：可能包含订阅令牌，已加入 `.gitignore`。
+- `storage/`：保存任务、视频、封面和 Redis 数据，已加入 `.gitignore`。
+- 提交或公开仓库前，请运行 `git status --short`，确认没有把密钥、Cookie、私人素材或生成内容加入暂存区。
+- 如果密钥曾经进入 Git 历史，仅删除文件并不安全，应立即在服务商后台撤销并重新生成密钥。
+
+## 更新与维护
+
+本仓库保留上游来源。需要同步原项目更新时，可以添加或使用 `upstream` 远程：
+
+```bash
+git remote add upstream https://github.com/harry0703/MoneyPrinterTurbo.git
+git fetch upstream
+git merge upstream/main
+```
+
+同步前建议创建备份分支，并在合并后重新验证分镜解析、封面输出、WebUI 和 API。
+
+## 验证
+
+本增强版为分镜解析、任务参数、封面渲染、任务结果和界面多语言增加了测试。常用检查命令：
+
+```bash
+python -m unittest discover -s test -p "test_*.py"
+python -m compileall -q app webui
+```
+
+具体服务商、模型、配音、字幕、音乐和上游完整功能说明继续见下文。
+
 ## 界面预览 🖥️
 
 <h4 align="center">WebUI</h4>

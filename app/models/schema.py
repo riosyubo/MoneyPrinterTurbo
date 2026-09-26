@@ -3,9 +3,10 @@ from enum import Enum
 from typing import Any, List, Literal, Optional, Union
 
 import pydantic
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import config
+from app.models.storyboard import parse_storyboard_text
 
 # 忽略 Pydantic 的特定警告
 warnings.filterwarnings(
@@ -104,6 +105,8 @@ class VideoParams(BaseModel):
     """
 
     video_subject: str
+    storyboard_enabled: bool = False
+    storyboard_text: str = Field(default="", max_length=30000)
     video_script: str = ""  # Script used to generate the video
     video_terms: Optional[str | list] = None  # Keywords used to generate the video
     video_aspect: Optional[VideoAspect] = VideoAspect.portrait.value
@@ -113,6 +116,7 @@ class VideoParams(BaseModel):
     video_clip_duration: int = Field(default=5, ge=1)
     video_clip_speed: Optional[float] = 1.0
     match_materials_to_script: bool = False
+    cover_enabled: bool = False
     video_count: int = Field(default=1, ge=1)
 
     video_source: Optional[str] = "pexels"
@@ -159,6 +163,12 @@ class VideoParams(BaseModel):
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
+
+    @model_validator(mode="after")
+    def validate_storyboard(self):
+        if self.storyboard_enabled:
+            parse_storyboard_text(self.storyboard_text)
+        return self
 
 
 class SubtitleRequest(BaseModel):

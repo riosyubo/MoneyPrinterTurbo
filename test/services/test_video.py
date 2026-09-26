@@ -14,6 +14,7 @@ from moviepy import (
     ImageClip,
     VideoFileClip,
 )
+from PIL import Image
 
 # add project root to python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -63,6 +64,24 @@ class TestVideoService(unittest.TestCase):
         config.app.update(self.original_app_config)
         vd._runtime_disabled_video_codecs.clear()
         vd._ffmpeg_encoder_exists.cache_clear()
+
+    def test_render_cover_image_adds_title_and_keeps_frame_dimensions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "cover.jpg")
+            frame = vd.np.zeros((640, 360, 3), dtype=vd.np.uint8)
+
+            result = vd.render_cover_image(
+                frame=frame,
+                output_path=output_path,
+                title="每天吃五六种药，怎样整理才不容易吃错？",
+                font_name="MicrosoftYaHeiBold.ttc",
+            )
+
+            self.assertEqual(result, output_path)
+            with Image.open(output_path) as cover:
+                self.assertEqual(cover.size, (360, 640))
+                self.assertEqual(cover.format, "JPEG")
+                self.assertGreater(max(cover.convert("L").getextrema()), 0)
 
     def test_generate_video_rejects_font_outside_directory_before_opening_media(self):
         """WebUI、CLI 或内部调用绕过 API 时，渲染层也必须阻断越界字体。"""

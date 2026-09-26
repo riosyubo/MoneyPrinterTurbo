@@ -1206,6 +1206,118 @@ def subtitle_font_supports_text(font_path: str, text: str) -> bool:
     return _subtitle_font_supports_sample(font_path, sample)
 
 
+def _wrap_cover_title(
+    title: str,
+    font: ImageFont.FreeTypeFont,
+    max_width: int,
+    max_lines: int = 4,
+) -> list[str]:
+    """Wrap mixed Chinese/Latin title text by its rendered pixel width."""
+    lines: list[str] = []
+    current = ""
+    for char in " ".join(str(title or "").split()):
+        candidate = f"{current}{char}"
+        bbox = font.getbbox(candidate)
+        if current and bbox[2] - bbox[0] > max_width:
+            lines.append(current.rstrip())
+            current = char.lstrip()
+        else:
+            current = candidate
+    if current:
+        lines.append(current.rstrip())
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and font.getbbox(f"{last}…")[2] > max_width:
+            last = last[:-1]
+        lines[-1] = f"{last.rstrip()}…"
+    return lines
+
+
+def render_cover_image(
+    frame: np.ndarray,
+    output_path: str,
+    title: str,
+    font_name: str = "STHeitiMedium.ttc",
+) -> str:
+    """Render a video frame as a JPEG cover with the video subject on top."""
+    title = str(title or "").strip()
+    if not title:
+        raise ValueError("cover title cannot be empty")
+
+    image = Image.fromarray(np.asarray(frame).astype(np.uint8)).convert("RGB")
+    width, height = image.size
+    font_path = file_security.resolve_path_within_directory(
+        utils.font_dir(), font_name or "STHeitiMedium.ttc"
+    )
+    font_size = max(36, int(min(width, height) * 0.085))
+    max_text_width = int(width * 0.82)
+    font = ImageFont.truetype(font_path, font_size)
+    lines = _wrap_cover_title(title, font, max_text_width)
+    punctuation = set("，。！？；：、,.!?;:")
+    while (
+        len(lines) > 3
+        or any(line and line[0] in punctuation for line in lines[1:])
+    ) and font_size > 36:
+        font_size = max(36, font_size - 4)
+        font = ImageFont.truetype(font_path, font_size)
+        lines = _wrap_cover_title(title, font, max_text_width)
+
+    text = "\n".join(lines)
+    spacing = max(8, int(font_size * 0.28))
+    draw = ImageDraw.Draw(image)
+    bbox = draw.multiline_textbbox(
+        (0, 0), text, font=font, spacing=spacing, align="center", stroke_width=2
+    )
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    pad_x = int(font_size * 0.65)
+    pad_y = int(font_size * 0.5)
+    left = max(24, int((width - text_width) / 2) - pad_x)
+    right = min(width - 24, int((width + text_width) / 2) + pad_x)
+    top = max(24, int((height - text_height) / 2) - pad_y)
+    bottom = min(height - 24, int((height + text_height) / 2) + pad_y)
+
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    overlay_draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=max(20, int(font_size * 0.35)),
+        fill=(0, 0, 0, 155),
+    )
+    image = Image.alpha_composite(image.convert("RGBA"), overlay)
+    draw = ImageDraw.Draw(image)
+    text_x = width / 2
+    text_y = (height - text_height) / 2 - bbox[1]
+    draw.multiline_text(
+        (text_x, text_y),
+        text,
+        font=font,
+        fill="white",
+        anchor="ma",
+        align="center",
+        spacing=spacing,
+        stroke_width=max(2, int(font_size * 0.035)),
+        stroke_fill="#111111",
+    )
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    image.convert("RGB").save(output_path, format="JPEG", quality=94, optimize=True)
+    return output_path
+
+
+def generate_cover_image(
+    video_path: str,
+    output_path: str,
+    title: str,
+    font_name: str = "STHeitiMedium.ttc",
+) -> str:
+    """Extract a stable early frame and turn it into a titled cover image."""
+    with _open_video_clip_quietly(video_path) as clip:
+        frame_time = min(0.2, max(0.0, float(clip.duration or 0) / 2))
+        frame = clip.get_frame(frame_time)
+    return render_cover_image(frame, output_path, title, font_name)
+
+
 def generate_video(
     video_path: str,
     audio_path: str,

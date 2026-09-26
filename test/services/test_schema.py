@@ -52,6 +52,21 @@ class TestVideoParams(unittest.TestCase):
         self.assertEqual(params.video_clip_duration, 1)
         self.assertEqual(params.video_count, 1)
 
+    def test_storyboard_requires_valid_scene_text_when_enabled(self):
+        with self.assertRaises(ValidationError):
+            VideoParams(
+                video_subject="Coffee",
+                storyboard_enabled=True,
+                storyboard_text="",
+            )
+
+        params = VideoParams(
+            video_subject="Coffee",
+            storyboard_enabled=True,
+            storyboard_text="Narration: Make coffee.\nVisual: Coffee being poured.",
+        )
+        self.assertTrue(params.storyboard_enabled)
+
     def test_subtitle_modes_accept_only_supported_api_values(self):
         """新增字幕参数必须拒绝拼写错误，避免请求成功后静默降级。"""
         params = VideoParams(

@@ -1256,7 +1256,7 @@ class TestTaskService(unittest.TestCase):
         完整任务在自动发布未配置时仍应稳定完成，并把所有中间产物写入最终
         状态。这里还覆盖 API 可能传入字符串拼接模式的兼容转换。
         """
-        params = VideoParams(video_subject="Coffee")
+        params = VideoParams(video_subject="Coffee", cover_enabled=True)
         params.video_concat_mode = "sequential"
 
         with (
@@ -1280,6 +1280,11 @@ class TestTaskService(unittest.TestCase):
                 return_value=(["final.mp4"], ["combined.mp4"], []),
             ),
             patch.object(
+                tm.video,
+                "generate_cover_image",
+                return_value="cover-1.jpg",
+            ) as generate_cover,
+            patch.object(
                 tm.upload_post.upload_post_service,
                 "is_configured",
                 return_value=False,
@@ -1290,10 +1295,13 @@ class TestTaskService(unittest.TestCase):
             result = tm.start("complete-video", params)
 
         self.assertEqual(result["videos"], ["final.mp4"])
+        self.assertEqual(len(result["covers"]), 1)
+        self.assertTrue(result["covers"][0].endswith("cover-1.jpg"))
         self.assertEqual(result["combined_videos"], ["combined.mp4"])
         self.assertEqual(result["cross_post_results"], None)
         self.assertEqual(params.video_concat_mode, tm.VideoConcatMode.sequential)
         cross_post.assert_not_called()
+        generate_cover.assert_called_once()
         update_task.assert_called_with(
             "complete-video",
             state=tm.const.TASK_STATE_COMPLETE,
