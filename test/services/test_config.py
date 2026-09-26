@@ -187,6 +187,22 @@ class TestConfigPersistence:
         assert upload_post_keys <= example_config["app"].keys()
         assert upload_post_keys.isdisjoint(example_config.get("ui", {}).keys())
 
+    def test_douyin_settings_belong_to_app_section(self):
+        example_config = self._load_example_config()
+        douyin_keys = {
+            "douyin_enabled",
+            "douyin_auto_publish",
+            "douyin_access_token",
+            "douyin_open_id",
+            "douyin_client_key",
+            "douyin_refresh_token",
+            "douyin_private_status",
+            "douyin_allow_download",
+        }
+
+        assert douyin_keys <= example_config["app"].keys()
+        assert douyin_keys.isdisjoint(example_config.get("ui", {}).keys())
+
     def test_save_config_uses_parseable_atomic_output(self):
         """
         配置保存先写临时文件再原子替换。测试同时确认输出仍是合法 TOML，

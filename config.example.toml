@@ -500,6 +500,20 @@ upload_post_youtube_made_for_kids = false
 # Cross-post jobs run in the current process and are not resumed after restart.
 upload_post_max_pending_tasks = 10
 
+# Official Douyin Open Platform publishing. This is separate from TikTok.
+# The application and authorized account must have the video.create.bind scope.
+douyin_enabled = false
+douyin_auto_publish = false
+# Use either a current access token, or client_key + refresh_token for automatic
+# access-token refresh. Keep these values only in config.toml; never commit them.
+douyin_access_token = ""
+douyin_open_id = ""
+douyin_client_key = ""
+douyin_refresh_token = ""
+# 0 = public, 1 = private, 2 = friends only.
+douyin_private_status = 0
+douyin_allow_download = true
+
 # =============================================================================
 # Whisper Subtitles / Whisper 字幕
 # =============================================================================

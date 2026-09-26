@@ -129,6 +129,32 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Start-MoneyPrinterTurbo.ps1
 
 封面生成失败不会使已经生成的视频失败，页面会单独显示警告。
 
+## 自动发布到抖音
+
+本增强版可以通过抖音开放平台官方接口，在成片完成后将视频和生成的封面提交到已授权的抖音账号。抖音与 TikTok 是两个独立平台；Upload-Post 中的 `tiktok` 选项不能发布到中国大陆抖音。
+
+### 开通前提
+
+1. 在[抖音开放平台](https://developer.open-douyin.com/console)创建移动/网站应用并完成平台审核；
+2. 在应用能力管理中申请 `video.create.bind`（代替用户发布内容到抖音）；
+3. 让目标抖音账号授权该应用，取得用户 `open_id`、`access_token` 和 `refresh_token`；
+4. 发布内容必须符合抖音开放平台的投稿规范和抖音社区规则。
+
+该权限由抖音审核，项目代码不能代替用户申请或绕过平台授权。作品提交成功后还会经过抖音内容审核，审核期间通常只有发布账号自己可见。
+
+### WebUI 配置
+
+进入“设置 → 自动发布设置 → 抖音官方直连发布”，填写：
+
+- **抖音账号 Open ID**；
+- 当前可用的 **Access Token**，或者用于自动刷新令牌的 **Client Key + Refresh Token**；
+- 作品可见范围：公开、仅自己可见或仅好友可见；
+- 是否允许其他用户下载作品。
+
+然后开启“启用抖音官方接口”和“成片完成后自动发布到抖音”。每条视频完成后，后台发布队列会依次上传视频、上传生成的 JPG 封面并创建作品。发布失败只改变发布状态，不会删除成片或把视频生成任务改成失败。
+
+相关接口：[上传视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/upload-video)、[上传图片](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-image-text/image-upload)、[创建视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/video-create)。
+
 ## 数据与密钥安全
 
 - `config.toml`：保存本机 API 配置，已加入 `.gitignore`。

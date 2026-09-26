@@ -1857,6 +1857,55 @@ class TestTaskService(unittest.TestCase):
                     task["cross_post_state"], tm.const.CROSS_POST_STATE_COMPLETE
                 )
 
+    def test_cross_post_routes_douyin_with_matching_generated_cover(self):
+        state = MemoryState()
+        state.update_task(
+            "douyin-publish",
+            state=tm.const.TASK_STATE_COMPLETE,
+            progress=100,
+            videos=["final.mp4"],
+            covers=["cover.jpg"],
+            cross_post_state=tm.const.CROSS_POST_STATE_PENDING,
+        )
+        metadata = {
+            "title": "用药整理",
+            "caption": "每天药很多，先整理一张清单。#老年健康",
+            "hashtags": ["#老年健康"],
+        }
+
+        with (
+            patch.object(tm.sm, "state", state),
+            patch.object(tm.llm, "generate_social_metadata", return_value=metadata),
+            patch.object(tm.upload_post, "cross_post_video") as upload_post,
+            patch.object(
+                tm.douyin,
+                "publish_video",
+                return_value={"success": True, "platform": "douyin"},
+            ) as publish_douyin,
+        ):
+            tm._run_cross_post(
+                "douyin-publish",
+                ("final.mp4",),
+                "用药整理",
+                "帮助老人整理每日用药。",
+                "zh-CN",
+                ("douyin",),
+                "public",
+                False,
+                ("cover.jpg",),
+            )
+
+        upload_post.assert_not_called()
+        publish_douyin.assert_called_once_with(
+            video_path="final.mp4",
+            title="每天药很多，先整理一张清单。#老年健康",
+            cover_path="cover.jpg",
+        )
+        self.assertEqual(
+            state.get_task("douyin-publish")["cross_post_state"],
+            tm.const.CROSS_POST_STATE_COMPLETE,
+        )
+
     def test_cross_post_shares_metadata_between_youtube_fields_and_title(self):
         """YouTube 专属字段与共享发布标题必须来自同一次元数据调用。"""
         metadata = {

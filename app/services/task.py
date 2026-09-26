@@ -21,6 +21,7 @@ from app.models.storyboard import (
     storyboard_visual_terms,
 )
 from app.services import bgm as bgm_service
+from app.services import douyin
 from app.services import (
     elevenlabs_music,
     llm,
@@ -70,6 +71,7 @@ _INTERRUPTED_CROSS_POST_ERROR = (
 )
 # Map upload-post platform ids to the social platform names llm.py accepts.
 _CROSS_POST_SOCIAL_PLATFORMS = {
+    "douyin": "tiktok",
     "tiktok": "tiktok",
     "instagram": "instagram_reels",
     "facebook": "facebook_reels",
@@ -1171,6 +1173,7 @@ def _run_cross_post(
     platforms: tuple[str, ...],
     youtube_privacy_status: str,
     youtube_made_for_kids: bool = False,
+    cover_paths: tuple[str, ...] = (),
 ) -> None:
     """后台执行跨平台发布，并只补充发布相关的任务字段。"""
     results = []
@@ -1227,19 +1230,39 @@ def _run_cross_post(
                 or "Check out this video! #shorts #viral"
             )
 
-        for video_path in video_paths:
-            result = upload_post.cross_post_video(
-                video_path=video_path,
-                title=post_title,
-                platforms=list(platforms),
-                youtube_extra=youtube_extra,
-            )
-            if not isinstance(result, dict):
-                result = {
-                    "success": False,
-                    "error": "Upload-Post returned an invalid response",
-                }
-            results.append(result)
+        upload_post_platforms = [
+            platform for platform in platforms if platform != "douyin"
+        ]
+        publish_to_douyin = "douyin" in platforms
+        for index, video_path in enumerate(video_paths):
+            if upload_post_platforms:
+                result = upload_post.cross_post_video(
+                    video_path=video_path,
+                    title=post_title,
+                    platforms=upload_post_platforms,
+                    youtube_extra=youtube_extra,
+                )
+                if not isinstance(result, dict):
+                    result = {
+                        "success": False,
+                        "error": "Upload-Post returned an invalid response",
+                    }
+                results.append(result)
+
+            if publish_to_douyin:
+                cover_path = cover_paths[index] if index < len(cover_paths) else None
+                result = douyin.publish_video(
+                    video_path=video_path,
+                    title=post_title,
+                    cover_path=cover_path,
+                )
+                if not isinstance(result, dict):
+                    result = {
+                        "success": False,
+                        "platform": "douyin",
+                        "error": "Douyin returned an invalid response",
+                    }
+                results.append(result)
 
         failures = [result for result in results if not result.get("success")]
         if failures:
@@ -1343,6 +1366,7 @@ def _schedule_cross_post(
     platforms: list[str],
     youtube_privacy_status: str,
     youtube_made_for_kids: bool = False,
+    cover_paths: list[str] | None = None,
 ) -> str | None:
     """提交后台发布任务；成功返回 None，调度失败返回可查询的错误原因。"""
     if not _cross_post_slots.acquire(blocking=False):
@@ -1370,6 +1394,7 @@ def _schedule_cross_post(
             tuple(platforms),
             youtube_privacy_status,
             youtube_made_for_kids,
+            tuple(cover_paths or ()),
         )
         _register_cross_post_future(task_id, future)
         future.add_done_callback(partial(_finalize_cross_post_future, task_id))
@@ -1689,15 +1714,19 @@ def _run_pipeline(
 
     # 7. 先完成视频生成任务，再按需提交跨平台发布。第三方上传可能耗时
     # 数分钟，不应阻塞视频结果返回，也不能反向影响已经生成的成片。
-    cross_post_enabled = (
+    upload_post_enabled = (
         upload_post.upload_post_service.is_configured()
         and upload_post.upload_post_service.auto_upload
     )
-    platforms = (
-        list(upload_post.upload_post_service.platforms) if cross_post_enabled else []
+    douyin_enabled = (
+        douyin.douyin_service.is_configured() and douyin.douyin_service.auto_publish
     )
-    should_cross_post = cross_post_enabled and bool(platforms)
-    if cross_post_enabled and not platforms:
+    platforms = list(upload_post.upload_post_service.platforms) if upload_post_enabled else []
+    if douyin_enabled:
+        platforms.append("douyin")
+    platforms = list(dict.fromkeys(platforms))
+    should_cross_post = bool(platforms)
+    if upload_post_enabled and not upload_post.upload_post_service.platforms:
         logger.warning(
             f"skip cross-post because no platforms are configured, task_id: {task_id}"
         )
@@ -1737,6 +1766,7 @@ def _run_pipeline(
             youtube_made_for_kids=(
                 upload_post.upload_post_service.youtube_made_for_kids
             ),
+            cover_paths=cover_paths,
         )
         # 队列满或线程池关闭属于同步可知的调度失败。任务状态已经由调度函数
         # 更新，这里同步修正返回快照，避免调用方收到与后续查询不一致的 pending。

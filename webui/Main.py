@@ -146,6 +146,11 @@ VIDEO_SOURCE_GROUPS = {
 # 也方便用户从 WebUI 直接完成首次配置和后续账号维护。
 UPLOAD_POST_API_KEYS_URL = "https://app.upload-post.com/api-keys"
 UPLOAD_POST_MANAGE_USERS_URL = "https://app.upload-post.com/manage-users"
+DOUYIN_OPEN_PLATFORM_URL = "https://developer.open-douyin.com/console"
+DOUYIN_PUBLISHING_DOCS_URL = (
+    "https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/"
+    "openapi/video-management/douyin/create-video/upload-video"
+)
 # 素材设置与视频来源说明共用推广入口，避免两个位置的链接参数不一致。
 OFOX_REFERRAL_URL = (
     "https://ofox.ai/?utm_source=github"
@@ -276,6 +281,8 @@ CREDENTIAL_KEY_SUFFIXES = (
     "access_key",
     "secret_key",
     "speech_key",
+    "access_token",
+    "refresh_token",
 )
 # 只恢复密钥而不恢复配套配置项时，凭据仍然不可用。这些配套项与密钥一起备份。
 CREDENTIAL_COMPANION_KEYS = {
@@ -293,7 +300,7 @@ CREDENTIAL_COMPANION_KEYS = {
 }
 
 NON_LLM_COMPANION_KEYS = {
-    "app": ("upload_post_username",)
+    "app": ("upload_post_username", "douyin_open_id", "douyin_client_key")
 }
 # 同一个密钥在不同面板可能使用各自的控件 key：音频面板直接编辑 Gemini 和
 # MiMo 的 LLM 密钥。恢复备份时必须清除每一个别名，否则遗留的旧值
@@ -1951,6 +1958,51 @@ def _render_generation_logs(task_id):
     st.code("\n".join(log_records))
 
 
+def _render_cross_post_status(task):
+    state = (task or {}).get("cross_post_state")
+    if state == const.CROSS_POST_STATE_PENDING:
+        st.info(tr("Auto-Publish Pending"))
+    elif state == const.CROSS_POST_STATE_PROCESSING:
+        st.info(tr("Auto-Publish Processing"))
+    elif state == const.CROSS_POST_STATE_COMPLETE:
+        results = task.get("cross_post_results") or []
+        douyin_count = sum(
+            1
+            for result in results
+            if isinstance(result, Mapping)
+            and result.get("platform") == "douyin"
+            and result.get("success")
+        )
+        if douyin_count:
+            st.success(tr("Douyin Submission Accepted").format(count=douyin_count))
+        else:
+            st.success(tr("Auto-Publish Completed"))
+    elif state == const.CROSS_POST_STATE_FAILED:
+        error = str(task.get("cross_post_error") or "").strip()
+        message = tr("Auto-Publish Failed")
+        st.warning(f"{message}: {error}" if error else message)
+
+
+@st.fragment(run_every=webui_task.TASK_LOG_REFRESH_INTERVAL_SECONDS)
+def _render_running_cross_post(task_id):
+    try:
+        task = sm.state.get_task(task_id)
+    except Exception as exc:
+        logger.exception(
+            f"failed to query publishing task: task_id={task_id}, error={exc}"
+        )
+        st.warning(tr("Auto-Publish Failed"))
+        return
+
+    _render_cross_post_status(task)
+    state = (task or {}).get("cross_post_state")
+    if state not in {
+        const.CROSS_POST_STATE_PENDING,
+        const.CROSS_POST_STATE_PROCESSING,
+    }:
+        st.rerun(scope="app")
+
+
 def _render_generation_task_snapshot(task_id, task):
     """根据状态存储中的快照渲染进度、失败原因或最终成片。"""
     if not task:
@@ -1984,6 +2036,11 @@ def _render_generation_task_snapshot(task_id, task):
         return
 
     st.success(tr("Video Generation Completed"))
+    if task.get("cross_post_state") not in {
+        const.CROSS_POST_STATE_PENDING,
+        const.CROSS_POST_STATE_PROCESSING,
+    }:
+        _render_cross_post_status(task)
     for warning in task.get("warnings") or []:
         if isinstance(warning, Mapping) and warning.get("code") == "batch_materials_reused":
             st.warning(
@@ -2120,6 +2177,11 @@ def _render_current_generation_task():
     if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
         _remove_active_generation_task(task_id)
         _render_generation_task_snapshot(task_id, task)
+        if task.get("cross_post_state") in {
+            const.CROSS_POST_STATE_PENDING,
+            const.CROSS_POST_STATE_PROCESSING,
+        }:
+            _render_running_cross_post(task_id)
         return
 
     _render_running_generation_task(task_id)
@@ -3269,6 +3331,97 @@ def _render_settings_dialog():
                 )
                 if isinstance(made_for_kids, bool):
                     _set_runtime_config("app", "upload_post_youtube_made_for_kids", made_for_kids)
+
+            st.divider()
+            st.write(tr("Douyin Direct Publishing"))
+            st.info(
+                tr("Douyin Setup Guide").format(
+                    console_url=DOUYIN_OPEN_PLATFORM_URL,
+                    docs_url=DOUYIN_PUBLISHING_DOCS_URL,
+                )
+            )
+
+            douyin_enabled_saved = bool(config.app.get("douyin_enabled", False))
+            douyin_enabled = st.checkbox(
+                tr("Enable Douyin Integration"),
+                value=douyin_enabled_saved,
+                key="douyin_enabled_checkbox",
+            )
+            if douyin_enabled != douyin_enabled_saved:
+                _set_runtime_config("app", "douyin_enabled", douyin_enabled)
+
+            douyin_auto_saved = bool(config.app.get("douyin_auto_publish", False))
+            douyin_auto_publish = st.checkbox(
+                tr("Enable Douyin Auto-Publish"),
+                value=douyin_auto_saved,
+                help=tr("Douyin Auto-Publish Help"),
+                key="douyin_auto_publish_checkbox",
+            )
+            if douyin_auto_publish != douyin_auto_saved:
+                _set_runtime_config("app", "douyin_auto_publish", douyin_auto_publish)
+
+            douyin_open_id = st.text_input(
+                tr("Douyin Open ID"),
+                value=config.app.get("douyin_open_id", ""),
+                key="douyin_open_id_input",
+            )
+            if douyin_open_id != config.app.get("douyin_open_id", ""):
+                _set_runtime_config("app", "douyin_open_id", douyin_open_id)
+
+            douyin_access_token = st.text_input(
+                tr("Douyin Access Token"),
+                value=config.app.get("douyin_access_token", ""),
+                type="password",
+                help=tr("Douyin Token Help"),
+                key="douyin_access_token_input",
+            )
+            if douyin_access_token != config.app.get("douyin_access_token", ""):
+                _set_runtime_config("app", "douyin_access_token", douyin_access_token)
+
+            douyin_client_key = st.text_input(
+                tr("Douyin Client Key"),
+                value=config.app.get("douyin_client_key", ""),
+                key="douyin_client_key_input",
+            )
+            if douyin_client_key != config.app.get("douyin_client_key", ""):
+                _set_runtime_config("app", "douyin_client_key", douyin_client_key)
+
+            douyin_refresh_token = st.text_input(
+                tr("Douyin Refresh Token"),
+                value=config.app.get("douyin_refresh_token", ""),
+                type="password",
+                help=tr("Douyin Refresh Token Help"),
+                key="douyin_refresh_token_input",
+            )
+            if douyin_refresh_token != config.app.get("douyin_refresh_token", ""):
+                _set_runtime_config("app", "douyin_refresh_token", douyin_refresh_token)
+
+            douyin_privacy_labels = {
+                0: tr("Douyin Public"),
+                1: tr("Douyin Private"),
+                2: tr("Douyin Friends Only"),
+            }
+            douyin_privacy_saved = config.app.get("douyin_private_status", 0)
+            if douyin_privacy_saved not in douyin_privacy_labels:
+                douyin_privacy_saved = 0
+            douyin_private_status = st.selectbox(
+                tr("Douyin Visibility"),
+                options=list(douyin_privacy_labels),
+                index=list(douyin_privacy_labels).index(douyin_privacy_saved),
+                format_func=douyin_privacy_labels.get,
+                key="douyin_private_status_selectbox",
+            )
+            if douyin_private_status != config.app.get("douyin_private_status", 0):
+                _set_runtime_config("app", "douyin_private_status", douyin_private_status)
+
+            douyin_download_saved = bool(config.app.get("douyin_allow_download", True))
+            douyin_allow_download = st.checkbox(
+                tr("Allow Douyin Video Download"),
+                value=douyin_download_saved,
+                key="douyin_allow_download_checkbox",
+            )
+            if douyin_allow_download != douyin_download_saved:
+                _set_runtime_config("app", "douyin_allow_download", douyin_allow_download)
 
         # 左侧面板 - 日志设置
         with left_config_panel:
